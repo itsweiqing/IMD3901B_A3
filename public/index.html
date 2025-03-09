@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>VR Primitives Sort Game</title>
+
+    <!--js file-->
+    <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+    <script src="https://unpkg.com/aframe-environment-component@1.3.3/dist/aframe-environment-component.min.js"></script>
+    <script src="https://unpkg.com/aframe-animation-component@6.1.1/dist/aframe-animation-component.min.js"></script>
+    <script src="https://unpkg.com/aframe-extras@^6/dist/aframe-extras.min.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="js/timer.js"></script>  
+    <script src="js/assignTargetTypes.js"></script>  
+
+    <!--css file-->
+    <link rel="stylesheet" href="css/user-gesture.css">
+
+</head>
+<body>
+    <a-scene>
+        <a-assets timeout="10000">
+        </a-assets>
+        <!--Camera and lights-->
+        <a-entity id = "camera" position = "0 1.6 0" camera wasd-controls look-controls>
+          <a-entity cursor="rayOrigin:mouse;" raycaster="far:20; interval:20; objects:.interactive;" id="cursor"></a-entity>
+          <a-text id="timer" timer position="0 2 -3" align="center" color="#000"></a-text>
+          <a-text id="targetText" position="4.2 -0.8 -3" align="right" color="#000"></a-text>
+          <a-entity id="attachedItem" visible="false"></a-entity>
+        </a-entity>
+
+        <!-- Messages -->
+        <a-text id="message" value="" position="0 2 -3" align="center" color="#000"></a-text>
+        <a-text id="mode_message" value="" position="0 1.8 -3" align="center" color="#000"></a-text>
+
+        <!-- Floors-->
+        <a-plane class="container" id="boxContainer" data-type="box" position="-2.5 0.2 -4" rotation="-90 0 0" width="5" height="5" color="#FFD4D4">
+          <a-text value="Box" position="0 0.5 0" align="center" color="#000"></a-text>
+        </a-plane>
+        <a-plane class="container" id="sphereContainer" data-type="sphere" position="2.5 0.2 -4" rotation="-90 0 0" width="5" height="5" color="#FFD4D4">
+            <a-text value="Sphere" position="0 0.5 0" align="center" color="#000"></a-text>
+        </a-plane>
+        <a-plane class="container" id="cylinderContainer" data-type="cylinder" position="-2.5 0.2 -9" rotation="-90 0 0" width="5" height="5" color="#FFD4D4">
+            <a-text value="Cylinder" position="0 0.5 0" align="center" color="#000"></a-text>
+        </a-plane>
+        <a-plane class="container" id="coneContainer" data-type="cone" position="2.5 0.2 -9" rotation="-90 0 0" width="5" height="5" color="#FFD4D4">
+            <a-text value="Cone" position="0 0.5 0" align="center" color="#000"></a-text>
+        </a-plane>
+        
+        <!-- Spawn Area -->
+        <a-plane id="spawnArea" position="22 0.2 -4" rotation="-90 0 0" width="30" height="30" color="#FFFFFF"></a-plane>
+
+        <!-- Competitive Button -->
+        <a-entity id="competeButton" position="-1.5 1 -3" visible="false">
+          <a-entity id="cButton" class="interactive"
+              geometry="primitive:box; width:2.5; depth:0.01; height:1;" 
+              material="color:rgb(255,0,0);"
+              animation__mouseenter="property: material.color; type: color; to: rgb(255,100,100); startEvents: mouseenter; dur: 100;"
+              animation__mouseleave="property: material.color; type: color; to: rgb(255,0,0); startEvents: mouseleave; dur: 100;">
+          </a-entity>
+          <a-text value="Competitive" align="center" color="#FFF" position="0 0 0.01"></a-text>
+      </a-entity>
+
+      <!--Cooperative Button-->
+      <a-entity id="coopButton" position="1.5 1 -3" visible="false">
+          <a-entity id="cpButton" class="interactive"
+              geometry="primitive:box; width:2.5; depth:0.01; height:1;" 
+              material="color:rgb(75,154,83);"
+              animation__mouseenter="property: material.color; type: color; to: rgb(115,194,123); startEvents: mouseenter; dur: 100;"
+              animation__mouseleave="property: material.color; type: color; to: rgb(75,154,83); startEvents: mouseleave; dur: 100;">
+          </a-entity>
+          <a-text value="Co-op" align="center" color="#FFF" position="0 0 0.01"></a-text>
+      </a-entity>
+
+        <!--Scene Environment-->
+        <a-entity environment="preset:forest; lighting: distant; skyType:gradient; skyColor:rgb(112, 226, 255); groundTexture:none; groundColor:#b09e78" ></a-entity>
+      </a-scene>
+
+    <script>
+        //socket set up
+        const socket = io('http://localhost:8080');
+
+        //variables
+        var [player1Type, player2Type] = assignTargetTypes();
+        
+        // Event listeners for game mode buttons
+        //---------Event Listeners ----------------
+        document.querySelector('#coopButton').addEventListener('click', () => {
+            console.log('Coop button clicked');
+            if (coopButton.getAttribute('visible')) {
+                socket.emit('gameModeSelected', 'coop');
+            }
+        });
+        document.querySelector('#competeButton').addEventListener('click', () => {
+            console.log('Compete button clicked');
+            if (competeButton.getAttribute('visible')) {
+                socket.emit('gameModeSelected', 'compete');
+            }   
+        });
+
+        //functions
+        // Helper function to check if an item is close enough to a container
+        function isItemTouchingContainer(item, container) {
+            const itemPosition = item.getAttribute('position');
+            const containerPosition = container.getAttribute('position');
+            const dx = itemPosition.x - containerPosition.x;
+            const dy = itemPosition.y - containerPosition.y;
+            const dz = itemPosition.z - containerPosition.z;
+            const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            return distance < 2.3;
+        }
+
+        // Count items of the target type that are inside the matching container.
+        function itemsInContainer(targetType) {
+            let count = 0;
+            const containers = document.querySelectorAll('.container');
+            containers.forEach((container) => {
+                if (container.getAttribute('data-type') === targetType) {
+                  const items = document.querySelectorAll('.item');
+                    items.forEach((item) => {
+                        if (item.tagName.toLowerCase() === "a-" + targetType) {
+                            if (isItemTouchingContainer(item, container)) {
+                                count++;
+                            }
+                        }
+                    });
+                }
+            });
+            return count;
+        }
+
+        // Socket listeners
+        socket.on('waitingForPlayer', () => {
+            document.querySelector('#message').setAttribute('value', 'Waiting for player 2...');
+            console.log('Waiting for player 2...');
+        });
+        
+        socket.on('bothPlayersConnected', () => {
+            document.querySelector('#message').setAttribute('value', 'All players in... Choose a game mode ');
+            document.querySelector('#coopButton').setAttribute('visible', true);
+            document.querySelector('#competeButton').setAttribute('visible', true);
+        });
+
+        socket.on('startGame', (gameMode) => {
+            document.querySelector('#coopButton').setAttribute('visible', false);
+            document.querySelector('#competeButton').setAttribute('visible', false);
+            document.querySelector('#message').setAttribute('visible', false);
+
+            if (gameMode === 'coop') {
+                document.querySelector('#mode_message').setAttribute('value', 'Co-op mode');
+                document.querySelector('#timer').setAttribute('timer', {gameMode: 'coop'});
+                // In co-op mode we set a fixed target (e.g. sort all box items)
+                document.querySelector('#targetText').setAttribute('text', 'value', `Sort 5 box items!`);
+            } else {
+                document.querySelector('#mode_message').setAttribute('value', 'Competitive mode');
+                document.querySelector('#targetText').setAttribute('text', 'value', `Player 1: sort ${player1Type} items\nPlayer 2: sort ${player2Type} items`);
+            }
+            document.querySelector('[timer]').emit('startGame');
+        });
+
+        // Create items based on data received from the server
+        socket.on('itemsGenerated', (items) => {
+            let existingItems = document.querySelectorAll('.item');
+            existingItems.forEach((item) => { item.parentNode.removeChild(item); });
+
+            const itemCount = 0;
+            items.forEach((itemData) => {
+                // Create an element based on the primitive type (e.g., a-box, a-sphere, etc.)
+                const itemEl = document.createElement(itemData.primitive);
+                itemEl.setAttribute('position', itemData.position);
+                itemEl.classList.add('interactive', 'item');
+                itemEl.setAttribute('id', 'item' + itemCount);
+                itemCount++;
+                document.querySelector('a-scene').appendChild(itemEl);
+
+                // Pickup event – hide the original and show it on the attached entity
+                itemEl.addEventListener('mousedown', () => {
+                    const itemInfo = {
+                        id: itemEl.getAttribute('id'),
+                        position: itemEl.getAttribute('position'),
+                        playerId: socket.id,
+                        primitive: itemData.primitive
+                    };
+                    socket.emit('itemPickedUp_s', itemInfo);
+                });
+                // Drop event – calculate drop position based on camera direction
+                itemEl.addEventListener('mouseup', () => {
+                    const itemInfo = {
+                        id: itemEl.getAttribute('id'),
+                        position: itemEl.getAttribute('position'),
+                        playerId: socket.id,
+                        primitive: itemData.primitive
+                    };
+                    const camera = document.getElementById('camera');
+                    const cameraDirection = camera.object3D.getWorldDirection(new THREE.Vector3());
+                    const dropPosition = cameraDirection.multiplyScalar(-1).add(camera.object3D.position);
+                    dropPosition.y -= 0.8;
+                    itemInfo.position = dropPosition;
+                    socket.emit('itemDropped_s', itemInfo);
+                });
+            });
+        });
+
+        // When an item is picked up, hide it and show a replica on the attached entity
+        socket.on('itemPickedUp_c', (itemData) => {
+          const item = document.getElementById(itemData.id);
+            item.setAttribute('visible', 'false');
+            if (itemData.playerId === socket.id) {
+                let attachedItem = document.getElementById('attachedItem');
+                attachedItem.setAttribute('visible', 'true');
+                // Replace the attachedItem with the correct primitive type
+                attachedItem.parentNode.removeChild(attachedItem);
+                attachedItem = document.createElement(itemData.primitive);
+                attachedItem.setAttribute('id', 'attachedItem');
+                attachedItem.setAttribute('position', "0 -0.8 -1");
+                document.getElementById('camera').appendChild(attachedItem);
+            }
+        });
+
+        // When an item is dropped, update its position and show it again
+        socket.on('itemDropped_c', (itemData) => {
+            const item = document.getElementById(itemData.id);
+            item.setAttribute('position', itemData.position);
+            item.setAttribute('visible', 'true');
+            const attachedItem = document.getElementById('attachedItem');
+            attachedItem.setAttribute('visible', 'false');
+        });
+
+        // End-of-game logic – check sorted items and display win/lose message
+        socket.on('gameOver', (gameMode) => {
+            let player1Score = 0;
+            let player2Score = 0;
+            // stopMusic(); // if you have audio
+
+            if (gameMode === 'compete') {
+                player1Score = itemsInContainer(player1Type);
+                player2Score = itemsInContainer(player2Type);
+                if (player1Score > player2Score) {
+                    document.getElementById('timer').setAttribute('value', 'Player 1 Wins!');
+                    document.getElementById('targetText').setAttribute('value', `Player 1: ${player1Score} sorted\nPlayer 2: ${player2Score} sorted`);
+                } else if (player1Score < player2Score) {
+                    document.getElementById('timer').setAttribute('value', 'Player 2 Wins!');
+                    document.getElementById('targetText').setAttribute('value', `Player 1: ${player1Score} sorted\nPlayer 2: ${player2Score} sorted`);
+                } else {
+                    document.getElementById('timer').setAttribute('value', 'It\'s a Draw!');
+                    document.getElementById('targetText').setAttribute('value', `Player 1: ${player1Score} sorted\nPlayer 2: ${player2Score} sorted`);
+                }
+            } else {
+                // In co-op mode, using "box" as the fixed target type
+                const sortedCount = itemsInContainer("box");
+                if (sortedCount >= 5) {
+                    document.getElementById('timer').setAttribute('value', `You Win!\nSorted: ${sortedCount}`);
+                } else {
+                    document.getElementById('timer').setAttribute('value', `You Lose!\nSorted: ${sortedCount}`);
+                }
+            }
+        });
+
+    </script>
+</body>
+</html>
